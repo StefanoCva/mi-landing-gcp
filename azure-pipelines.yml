@@ -1,0 +1,52 @@
+trigger:
+- main
+
+stages:
+- stage: Build
+  displayName: Build Image
+  jobs:
+  - job: Build
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - checkout: self
+
+    - task: Bash@3
+      displayName: 'Instalar gcloud SDK'
+      inputs:
+        targetType: inline
+        script: |
+          curl https://sdk.cloud.google.com | bash > /dev/null;
+          source $HOME/google-cloud-sdk/path.bash.inc
+          echo $GCLOUD_AUTH > key.json
+          gcloud auth activate-service-account --key-file=key.json
+          gcloud config set project $(GCP_PROJECT)
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+    - task: Bash@3
+      displayName: 'Build and Push Docker Image'
+      inputs:
+        targetType: inline
+        script: |
+          docker build -t us-central1-docker.pkg.dev/$(GCP_PROJECT)/mi-repo/landing:$(Build.BuildId) .
+          docker push us-central1-docker.pkg.dev/$(GCP_PROJECT)/mi-repo/landing:$(Build.BuildId)
+
+- stage: Deploy
+  displayName: Deploy to Cloud Run
+  dependsOn: Build
+  jobs:
+  - job: Deploy
+    pool:
+      vmImage: 'ubuntu-latest'
+    steps:
+    - task: Bash@3
+      displayName: 'Deploy to Cloud Run'
+      inputs:
+        targetType: inline
+        script: |
+          gcloud run deploy mi-landing \
+            --image us-central1-docker.pkg.dev/$(GCP_PROJECT)/mi-repo/landing:$(Build.BuildId) \
+            --platform managed \
+            --region us-central1 \
+            --allow-unauthenticated \
+            --port 80
